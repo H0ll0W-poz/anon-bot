@@ -57,6 +57,7 @@ async def on_shutdown(bot: Bot):
     await bot.session.close()
 
 
+
 async def main():
     logging.basicConfig(level=logging.INFO)
 
@@ -64,6 +65,11 @@ async def main():
     dp.shutdown.register(on_shutdown)
 
     app = web.Application()
+
+    async def health_check(request):
+        return web.Response(text="ANON is running")
+
+    app.router.add_get("/", health_check)
 
     webhook_handler = SimpleRequestHandler(
         dispatcher=dp,
@@ -76,11 +82,21 @@ async def main():
 
     port = int(os.getenv("PORT", "10000"))
 
-    web.run_app(
-        app,
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    site = web.TCPSite(
+        runner,
         host="0.0.0.0",
         port=port,
     )
+
+    try:
+        await site.start()
+        logging.info("ANON запущен на порту %s", port)
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
 
 
 if __name__ == "__main__":
