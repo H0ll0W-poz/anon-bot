@@ -3,15 +3,30 @@ import asyncio
 import logging
 import os
 
+from dotenv import load_dotenv
+from aiohttp import web
+
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.types import Message
-from dotenv import load_dotenv
+from aiogram.webhook.aiohttp_server import (
+    SimpleRequestHandler,
+    setup_application,
+)
 
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
+WEBHOOK_PATH = "/webhook"
 
+if not TOKEN:
+    raise ValueError("Не найден BOT_TOKEN")
+
+if not WEBHOOK_SECRET:
+    raise ValueError("Не найден WEBHOOK_SECRET")
+
+bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 
@@ -23,18 +38,49 @@ async def start_handler(message: Message):
     )
 
 
+async def on_startup(bot: Bot):
+    render_url = os.getenv("RENDER_EXTERNAL_URL")
+
+    if not render_url:
+        raise ValueError("Не найден RENDER_EXTERNAL_URL")
+
+    await bot.set_webhook(
+        url=f"{render_url}{WEBHOOK_PATH}",
+        secret_token=WEBHOOK_SECRET,
+    )
+
+    logging.info("ANON webhook установлен")
+
+
+async def on_shutdown(bot: Bot):
+    await bot.delete_webhook()
+    await bot.session.close()
+
+
 async def main():
     logging.basicConfig(level=logging.INFO)
 
-    if not TOKEN:
-        raise ValueError("Не найден BOT_TOKEN в файле .env")
+    dp.startup.register(on_startup)
+    dp.shutdown.register(on_shutdown)
 
-    bot = Bot(token=TOKEN)
+    app = web.Application()
 
-    try:
-        await dp.start_polling(bot)
-    finally:
-        await bot.session.close()
+    webhook_handler = SimpleRequestHandler(
+        dispatcher=dp,
+        bot=bot,
+        secret_token=WEBHOOK_SECRET,
+    )
+
+    webhook_handler.register(app, path=WEBHOOK_PATH)
+    setup_application(app, dp, bot=bot)
+
+    port = int(os.getenv("PORT", "10000"))
+
+    web.run_app(
+        app,
+        host="0.0.0.0",
+        port=port,
+    )
 
 
 if __name__ == "__main__":
