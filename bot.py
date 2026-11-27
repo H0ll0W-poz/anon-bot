@@ -56,7 +56,7 @@ main_menu = ReplyKeyboardMarkup(
 
 
 
-@dp.message(CommandStart(deep_link=True))
+@dp.message(CommandStart())
 async def start_handler(message: Message, command: CommandObject):
     user = message.from_user
     ref_code = command.args
