@@ -9,7 +9,7 @@ from aiohttp import web
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.webhook.aiohttp_server import (
     SimpleRequestHandler,
     setup_application,
@@ -30,6 +30,26 @@ if not WEBHOOK_SECRET:
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
+main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [
+            KeyboardButton(text="✉️ Отправить сообщение"),
+        ],
+        [
+            KeyboardButton(text="💬 Мои диалоги"),
+        ],
+        [
+            KeyboardButton(text="👤 Мой профиль"),
+        ],
+        [
+            KeyboardButton(text="⚙️ Настройки"),
+        ],
+        [
+            KeyboardButton(text="❓ Помощь"),
+        ],
+    ],
+    resize_keyboard=True,
+)
 
 
 
@@ -54,12 +74,14 @@ async def start_handler(message: Message):
         await message.answer(
             "👋 Добро пожаловать в ANON!\n\n"
             "Твоя регистрация успешно завершена.\n"
-            "Теперь ты можешь пользоваться анонимными сообщениями."
+            "Теперь ты можешь пользоваться анонимными сообщениями.",
+            reply_markup=main_menu
         )
     else:
         await message.answer(
             "С возвращением в ANON!\n\n"
-            "Твой профиль найден."
+            "Твой профиль найден.",
+            reply_markup=main_menu
         )
 
 
@@ -86,6 +108,7 @@ async def on_shutdown(bot: Bot):
 
 
 async def main():
+    logging.basicConfig(level=logging.INFO)
     global db_pool
 
     database_url = os.getenv("DATABASE_URL")
@@ -106,7 +129,6 @@ async def main():
         """)
 
     logging.info("Таблица пользователей готова")
-    logging.basicConfig(level=logging.INFO)
 
     app = web.Application()
 
