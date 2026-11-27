@@ -116,7 +116,11 @@ async def main():
     if not database_url:
         raise ValueError("Не найден DATABASE_URL")
 
-    db_pool = await asyncpg.create_pool(database_url)
+    db_pool = await asyncpg.create_pool(
+        database_url,
+        min_size=1,
+        max_size=5
+    )
     async with db_pool.acquire() as connection:
         await connection.execute("""
             CREATE TABLE IF NOT EXISTS users (
