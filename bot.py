@@ -58,11 +58,9 @@ async def on_shutdown(bot: Bot):
 
 
 
+
 async def main():
     logging.basicConfig(level=logging.INFO)
-
-    dp.startup.register(on_startup)
-    dp.shutdown.register(on_shutdown)
 
     app = web.Application()
 
@@ -91,12 +89,34 @@ async def main():
         port=port,
     )
 
+    webhook_task = None
+
     try:
+        # Сначала открываем порт для Render
         await site.start()
         logging.info("ANON запущен на порту %s", port)
+
+        # Затем устанавливаем webhook
+        async def install_webhook():
+            try:
+                await on_startup(bot)
+            except Exception:
+                logging.exception("Ошибка установки webhook")
+
+        webhook_task = asyncio.create_task(install_webhook())
+
         await asyncio.Event().wait()
+
     finally:
+        if webhook_task and not webhook_task.done():
+            webhook_task.cancel()
+            try:
+                await webhook_task
+            except asyncio.CancelledError:
+                pass
+
         await runner.cleanup()
+        await bot.session.close()
 
 
 if __name__ == "__main__":
