@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import secrets
 import asyncpg
 
 from dotenv import load_dotenv
@@ -29,6 +30,7 @@ if not WEBHOOK_SECRET:
     raise ValueError("Не найден WEBHOOK_SECRET")
 
 bot = Bot(token=TOKEN)
+bot_username = None
 dp = Dispatcher()
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -58,16 +60,57 @@ async def start_handler(message: Message):
     user = message.from_user
 
     async with db_pool.acquire() as connection:
+        new_ref_code = secrets.token_urlsafe(9)
+
         result = await connection.fetchrow(
             """
-            INSERT INTO users (telegram_id, username)
-            VALUES ($1, $2)
+            INSERT INTO users (telegram_id, username, ref_code)
+            VALUES ($1, $2, $3)
             ON CONFLICT (telegram_id)
-            DO UPDATE SET username = EXCLUDED.username
-            RETURNING (xmax = 0) AS is_new
+            DO UPDATE SET
+                username = EXCLUDED.username,
+                ref_code = COALESCE(users.ref_code, EXCLUDED.ref_code)
+            RETURNING (xmax = 0) AS is_new, ref_code
             """,
             user.id,
-            user.username
+            user.username,
+            new_ref_code
+        )
+
+    @dp.message(lambda message: message.text == "👤 Мой профиль")
+    async def profile_handler(message: Message):
+        user = message.from_user
+
+        async with db_pool.acquire() as connection:
+            profile = await connection.fetchrow(
+                """
+                SELECT username, registered_at, ref_code
+                FROM users
+                WHERE telegram_id = $1
+                """,
+                user.id
+            )
+
+        if not profile:
+            await message.answer("Профиль не найден. Напиши /start.")
+            return
+
+        username = (
+            f"@{profile['username']}"
+            if profile["username"]
+            else "Не установлен"
+        )
+
+        profile_link = (
+            f"https://t.me/{bot_username}?start={profile['ref_code']}"
+        )
+
+        await message.answer(
+            "👤 Твой профиль ANON\n\n"
+            f"Username: {username}\n"
+            "Дата регистрации: приватная\n\n"
+            "🔗 Твоя персональная ссылка:\n"
+            f"{profile_link}"
         )
 
     if result["is_new"]:
@@ -96,6 +139,9 @@ async def on_startup(bot: Bot):
         url=f"{render_url}{WEBHOOK_PATH}",
         secret_token=WEBHOOK_SECRET,
     )
+    global bot_username
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
 
     logging.info("ANON webhook установлен")
 
@@ -128,8 +174,14 @@ async def main():
                 telegram_id BIGINT UNIQUE NOT NULL,
                 username TEXT,
                 registered_at TIMESTAMPTZ DEFAULT NOW(),
-                is_active BOOLEAN DEFAULT TRUE
+                is_active BOOLEAN DEFAULT TRUE,
+                ref_code TEXT UNIQUE
             )
+        """)
+
+        await connection.execute("""
+            ALTER TABLE users
+            ADD COLUMN IF NOT EXISTS ref_code TEXT UNIQUE
         """)
 
     logging.info("Таблица пользователей готова")
