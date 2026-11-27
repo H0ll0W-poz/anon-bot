@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import os
+import asyncpg
 
 from dotenv import load_dotenv
 from aiohttp import web
@@ -19,6 +20,7 @@ load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 WEBHOOK_PATH = "/webhook"
+db_pool = None
 
 if not TOKEN:
     raise ValueError("Не найден BOT_TOKEN")
@@ -30,12 +32,36 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 
+
 @dp.message(CommandStart())
 async def start_handler(message: Message):
-    await message.answer(
-        "👋 Добро пожаловать в ANON!\n\n"
-        "Анонимные сообщения — просто, удобно и конфиденциально."
-    )
+    user = message.from_user
+
+    async with db_pool.acquire() as connection:
+        result = await connection.fetchrow(
+            """
+            INSERT INTO users (telegram_id, username)
+            VALUES ($1, $2)
+            ON CONFLICT (telegram_id)
+            DO UPDATE SET username = EXCLUDED.username
+            RETURNING (xmax = 0) AS is_new
+            """,
+            user.id,
+            user.username
+        )
+
+    if result["is_new"]:
+        await message.answer(
+            "👋 Добро пожаловать в ANON!\n\n"
+            "Твоя регистрация успешно завершена.\n"
+            "Теперь ты можешь пользоваться анонимными сообщениями."
+        )
+    else:
+        await message.answer(
+            "С возвращением в ANON!\n\n"
+            "Твой профиль найден."
+        )
+
 
 
 async def on_startup(bot: Bot):
@@ -60,6 +86,26 @@ async def on_shutdown(bot: Bot):
 
 
 async def main():
+    global db_pool
+
+    database_url = os.getenv("DATABASE_URL")
+
+    if not database_url:
+        raise ValueError("Не найден DATABASE_URL")
+
+    db_pool = await asyncpg.create_pool(database_url)
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id BIGSERIAL PRIMARY KEY,
+                telegram_id BIGINT UNIQUE NOT NULL,
+                username TEXT,
+                registered_at TIMESTAMPTZ DEFAULT NOW(),
+                is_active BOOLEAN DEFAULT TRUE
+            )
+        """)
+
+    logging.info("Таблица пользователей готова")
     logging.basicConfig(level=logging.INFO)
 
     app = web.Application()
@@ -115,6 +161,8 @@ async def main():
             except asyncio.CancelledError:
                 pass
 
+        if db_pool:
+            await db_pool.close()
         await runner.cleanup()
         await bot.session.close()
 
