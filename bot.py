@@ -10,6 +10,7 @@ from aiohttp import web
 
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
+from aiogram.filters.command import CommandObject
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.webhook.aiohttp_server import (
     SimpleRequestHandler,
@@ -55,9 +56,40 @@ main_menu = ReplyKeyboardMarkup(
 
 
 
-@dp.message(CommandStart())
-async def start_handler(message: Message):
+@dp.message(CommandStart(deep_link=True))
+async def start_handler(message: Message, command: CommandObject):
     user = message.from_user
+    ref_code = command.args
+    if ref_code:
+        async with db_pool.acquire() as connection:
+            recipient = await connection.fetchrow(
+                """
+                SELECT telegram_id
+                FROM users
+                WHERE ref_code = $1
+                """,
+                ref_code
+            )
+
+        if not recipient:
+            await message.answer(
+                "❌ Эта ссылка недействительна или устарела."
+            )
+            return
+
+        if recipient["telegram_id"] == user.id:
+            await message.answer(
+                "Это твоя собственная ссылка. "
+                "Отправлять сообщения самому себе нельзя."
+            )
+            return
+
+        await message.answer(
+            "✉️ Ты перешёл по персональной ссылке ANON!\n\n"
+            "Теперь можно будет написать владельцу ссылки анонимное сообщение.",
+            reply_markup=main_menu
+        )
+        return
 
     async with db_pool.acquire() as connection:
         new_ref_code = secrets.token_urlsafe(9)
