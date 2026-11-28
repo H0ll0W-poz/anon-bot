@@ -209,6 +209,26 @@ async def receive_anonymous_message(
         return
 
     sender_id = message.from_user.id
+
+    async with db_pool.acquire() as connection:
+        is_blocked = await connection.fetchval("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_blocks
+                WHERE blocker_id = $1
+                  AND blocked_id = $2
+            )
+        """, recipient_id, sender_id)
+
+    if is_blocked:
+        await state.clear()
+        await message.answer(
+            "🚫 Владелец ссылки ограничил возможность "
+            "отправлять ему сообщения.",
+            reply_markup=main_menu
+        )
+        return
+
     user1_id = min(sender_id, recipient_id)
     user2_id = max(sender_id, recipient_id)
 
@@ -715,6 +735,24 @@ async def receive_dialog_reply(
             if dialog["user1_id"] == sender_id
             else dialog["user1_id"]
         )
+
+        is_blocked = await connection.fetchval("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_blocks
+                WHERE blocker_id = $1
+                  AND blocked_id = $2
+            )
+        """, recipient_id, sender_id)
+
+        if is_blocked:
+            await state.clear()
+            await message.answer(
+                "🚫 Собеседник ограничил возможность "
+                "отправлять ему сообщения.",
+                reply_markup=main_menu
+            )
+            return
 
         message_id = await connection.fetchval(
             """
