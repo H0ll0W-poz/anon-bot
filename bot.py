@@ -811,6 +811,12 @@ async def settings_handler(message: Message):
                 text="🚫 Заблокированные пользователи",
                 callback_data="show_blocked_users"
             )
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Главное меню",
+                callback_data="back_to_main_menu"
+            )
         ]
     ])
 
@@ -818,6 +824,32 @@ async def settings_handler(message: Message):
         "⚙️ Настройки ANON",
         reply_markup=keyboard
     )
+
+@dp.callback_query(lambda callback: callback.data == "back_to_main_menu")
+async def back_to_main_menu_handler(callback: CallbackQuery):
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="✉️ Отправить сообщение"),
+                KeyboardButton(text="📬 Мои диалоги")
+            ],
+            [
+                KeyboardButton(text="👤 Профиль"),
+                KeyboardButton(text="⚙️ Настройки")
+            ],
+            [
+                KeyboardButton(text="ℹ️ Помощь")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
+    await callback.message.answer(
+        "🏠 Главное меню",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
 
 @dp.callback_query(lambda callback: callback.data == "show_blocked_users")
 async def show_blocked_users_handler(callback: CallbackQuery):
@@ -848,10 +880,42 @@ async def show_blocked_users_handler(callback: CallbackQuery):
             )
         ])
 
+    buttons.append([
+        InlineKeyboardButton(
+            text="⬅️ Назад к настройкам",
+            callback_data="back_to_settings"
+        )
+    ])
+
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     await callback.message.answer(
         f"🚫 Заблокированные пользователи: {len(blocked_users)}",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
+
+
+@dp.callback_query(lambda callback: callback.data == "back_to_settings")
+async def back_to_settings_handler(callback: CallbackQuery):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🚫 Заблокированные пользователи",
+                callback_data="show_blocked_users"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Главное меню",
+                callback_data="back_to_main_menu"
+            )
+        ]
+    ])
+
+    await callback.message.answer(
+        "⚙️ Настройки ANON",
         reply_markup=keyboard
     )
 
