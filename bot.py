@@ -48,6 +48,7 @@ dp = Dispatcher()
 # Состояния
 class SendMessageState(StatesGroup):
     waiting_for_text = State()
+    waiting_for_reply = State()
 
 
 # Главное меню
@@ -385,8 +386,20 @@ async def open_dialog_handler(callback: CallbackQuery):
         )
         return
 
+    reply_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="↩️ Ответить",
+                    callback_data=f"reply_dialog:{dialog_id}"
+                )
+            ]
+        ]
+    )
+
     await callback.message.answer(
-        f"💬 История диалога №{dialog_id}"
+        f"💬 История диалога №{dialog_id}",
+        reply_markup=reply_keyboard
     )
 
     for msg in messages:
@@ -402,6 +415,151 @@ async def open_dialog_handler(callback: CallbackQuery):
             f"🕒 {date}\n\n"
             f"{msg['text']}"
         )
+
+# Начало ответа в существующем диалоге
+@dp.callback_query(lambda callback: callback.data.startswith("reply_dialog:"))
+async def begin_dialog_reply(
+    callback: CallbackQuery,
+    state: FSMContext
+):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow(
+            """
+            SELECT id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+              AND is_active = TRUE
+            """,
+            dialog_id,
+            user_id
+        )
+
+    if not dialog:
+        await callback.answer(
+            "Диалог недоступен или уже завершён.",
+            show_alert=True
+        )
+        return
+
+    await state.update_data(reply_dialog_id=dialog_id)
+    await state.set_state(SendMessageState.waiting_for_reply)
+
+    await callback.answer()
+
+    await callback.message.answer(
+        "✍️ Напиши текст ответа. Он будет отправлен собеседнику."
+    )
+
+# Получение и доставка ответа в диалоге
+@dp.message(SendMessageState.waiting_for_reply)
+async def receive_dialog_reply(
+    message: Message,
+    state: FSMContext
+):
+    if message.text == "⬅️ Главное меню":
+        await state.clear()
+        await message.answer(
+            "Главное меню ANON.",
+            reply_markup=main_menu
+        )
+        return
+
+    if not message.text:
+        await message.answer(
+            "Пожалуйста, отправь текстовое сообщение."
+        )
+        return
+
+    data = await state.get_data()
+    dialog_id = data.get("reply_dialog_id")
+    sender_id = message.from_user.id
+
+    if not dialog_id:
+        await state.clear()
+        await message.answer(
+            "Диалог не найден. Открой его заново.",
+            reply_markup=main_menu
+        )
+        return
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow(
+            """
+            SELECT user1_id, user2_id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+              AND is_active = TRUE
+            """,
+            dialog_id,
+            sender_id
+        )
+
+        if not dialog:
+            await state.clear()
+            await message.answer(
+                "Диалог недоступен или уже завершён.",
+                reply_markup=main_menu
+            )
+            return
+
+        recipient_id = (
+            dialog["user2_id"]
+            if dialog["user1_id"] == sender_id
+            else dialog["user1_id"]
+        )
+
+        message_id = await connection.fetchval(
+            """
+            INSERT INTO messages (
+                dialog_id,
+                sender_id,
+                recipient_id,
+                text
+            )
+            VALUES ($1, $2, $3, $4)
+            RETURNING id
+            """,
+            dialog_id,
+            sender_id,
+            recipient_id,
+            message.text
+        )
+
+    try:
+        await bot.send_message(
+            chat_id=recipient_id,
+            text=(
+                "💬 Новое сообщение в ANON!\n\n"
+                f"{message.text}"
+            )
+        )
+
+        async with db_pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE messages
+                SET is_delivered = TRUE
+                WHERE id = $1
+                """,
+                message_id
+            )
+
+        await message.answer(
+            "📨 Ответ успешно доставлен!"
+        )
+
+    except Exception:
+        logging.exception("Ошибка доставки ответа")
+        await message.answer(
+            "⚠️ Ответ сохранён, но доставить его пока не удалось."
+        )
+
+    await state.clear()
 
 
 # Профиль
