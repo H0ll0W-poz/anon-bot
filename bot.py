@@ -802,6 +802,129 @@ async def receive_dialog_reply(
 
     await state.clear()
 
+# Настройки
+@dp.message(lambda message: message.text == "⚙️ Настройки")
+async def settings_handler(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🚫 Заблокированные пользователи",
+                callback_data="show_blocked_users"
+            )
+        ]
+    ])
+
+    await message.answer(
+        "⚙️ Настройки ANON",
+        reply_markup=keyboard
+    )
+
+@dp.callback_query(lambda callback: callback.data == "show_blocked_users")
+async def show_blocked_users_handler(callback: CallbackQuery):
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        blocked_users = await connection.fetch("""
+            SELECT blocked_id
+            FROM user_blocks
+            WHERE blocker_id = $1
+            ORDER BY created_at DESC
+        """, user_id)
+
+    if not blocked_users:
+        await callback.message.answer(
+            "🚫 У тебя пока нет заблокированных пользователей."
+        )
+        await callback.answer()
+        return
+
+    buttons = []
+
+    for blocked_user in blocked_users:
+        buttons.append([
+            InlineKeyboardButton(
+                text="🔓 Разблокировать пользователя",
+                callback_data=f"unblock_user:{blocked_user['blocked_id']}"
+            )
+        ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.answer(
+        f"🚫 Заблокированные пользователи: {len(blocked_users)}",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda callback: callback.data.startswith("unblock_user:"))
+async def unblock_user_handler(callback: CallbackQuery):
+    blocked_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        block_exists = await connection.fetchval("""
+            SELECT EXISTS (
+                SELECT 1
+                FROM user_blocks
+                WHERE blocker_id = $1
+                  AND blocked_id = $2
+            )
+        """, user_id, blocked_id)
+
+    if not block_exists:
+        await callback.answer(
+            "Этот пользователь уже разблокирован.",
+            show_alert=True
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, разблокировать",
+                callback_data=f"confirm_unblock:{blocked_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Отмена",
+                callback_data="show_blocked_users"
+            )
+        ]
+    ])
+
+    await callback.message.answer(
+        "🔓 Ты действительно хочешь разблокировать пользователя?",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda callback: callback.data.startswith("confirm_unblock:"))
+async def confirm_unblock_handler(callback: CallbackQuery):
+    blocked_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        result = await connection.execute("""
+            DELETE FROM user_blocks
+            WHERE blocker_id = $1
+              AND blocked_id = $2
+        """, user_id, blocked_id)
+
+    if result == "DELETE 0":
+        await callback.answer(
+            "Этот пользователь уже разблокирован.",
+            show_alert=True
+        )
+        return
+
+    await callback.message.edit_text(
+        "🔓 Пользователь успешно разблокирован!"
+    )
+
+    await callback.answer("Блокировка снята.")
 
 # Профиль
 @dp.message(lambda message: message.text == "👤 Мой профиль")
