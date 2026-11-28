@@ -253,6 +253,42 @@ async def back_to_main_menu(
     )
 
 
+# Мои диалоги — просмотр полученных сообщений
+@dp.message(lambda message: message.text == "💬 Мои диалоги")
+async def my_dialogs_handler(message: Message):
+    async with db_pool.acquire() as connection:
+        messages = await connection.fetch(
+            """
+            SELECT text, created_at
+            FROM messages
+            WHERE recipient_id = $1
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            message.from_user.id
+        )
+
+    if not messages:
+        await message.answer(
+            "💬 У тебя пока нет полученных сообщений.",
+            reply_markup=main_menu
+        )
+        return
+
+    await message.answer(
+        f"💬 Твои последние сообщения: {len(messages)}"
+    )
+
+    for msg in messages:
+        date = msg["created_at"].strftime("%d.%m.%Y %H:%M")
+
+        await message.answer(
+            "✉️ Анонимное сообщение\n"
+            f"🕒 {date}\n\n"
+            f"{msg['text']}"
+        )
+
+
 # Профиль
 @dp.message(lambda message: message.text == "👤 Мой профиль")
 async def profile_handler(message: Message):
