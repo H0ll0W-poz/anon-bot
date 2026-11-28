@@ -111,7 +111,8 @@ async def start_handler(
             return
 
         await state.update_data(
-            recipient_id=recipient["telegram_id"]
+            recipient_id=recipient["telegram_id"],
+            referrer_id=recipient["telegram_id"]
         )
 
         await message.answer(
@@ -209,6 +210,7 @@ async def receive_anonymous_message(
         return
 
     sender_id = message.from_user.id
+    referrer_id = data.get("referrer_id")
 
     async with db_pool.acquire() as connection:
         is_blocked = await connection.fetchval("""
@@ -277,35 +279,7 @@ async def receive_anonymous_message(
                 message.text
             )
 
-    try:
-        await bot.send_message(
-            chat_id=recipient_id,
-            text=(
-                "✉️ Тебе пришло новое анонимное сообщение!\n\n"
-                f"{message.text}"
-            )
-        )
 
-        async with db_pool.acquire() as connection:
-            await connection.execute(
-                """
-                UPDATE messages
-                SET is_delivered = TRUE
-                WHERE id = $1
-                """,
-                message_id
-            )
-
-        await message.answer("📨 Анонимное сообщение успешно доставлено!")
-
-    except Exception:
-        logging.exception("Ошибка доставки сообщения")
-
-        await message.answer(
-            "⚠️ Сообщение сохранено, но доставить его пока не удалось."
-        )
-
-    await state.clear()
 
 
 
@@ -1024,6 +998,12 @@ async def profile_handler(message: Message):
                     FROM user_blocks
                     WHERE blocker_id = $1
                 ) AS blocked_users
+                (
+                    SELECT COUNT(*)
+                    FROM users
+                    WHERE referred_by = $1
+                    AND referral_counted = TRUE
+                ) AS referrals
         """, user.id)
 
     if not profile:
@@ -1056,6 +1036,7 @@ async def profile_handler(message: Message):
         f"📩 Получено сообщений: {stats['received_messages']}\n"
         f"💬 Активных диалогов: {stats['active_dialogs']}\n"
         f"🚫 Заблокировано пользователей: {stats['blocked_users']}\n\n"
+        f"👥 Приглашено рефералов: {stats['referrals']}\n\n"
         "🔗 Твоя персональная ссылка:\n"
         f"{profile_link}"
     )
