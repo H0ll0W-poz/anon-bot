@@ -16,13 +16,17 @@ from aiogram.webhook.aiohttp_server import (
     SimpleRequestHandler,
     setup_application,
 )
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 WEBHOOK_PATH = "/webhook"
+
 db_pool = None
+bot_username = None
 
 if not TOKEN:
     raise ValueError("Не найден BOT_TOKEN")
@@ -31,35 +35,49 @@ if not WEBHOOK_SECRET:
     raise ValueError("Не найден WEBHOOK_SECRET")
 
 bot = Bot(token=TOKEN)
-bot_username = None
 dp = Dispatcher()
+
+
+# Состояния
+class SendMessageState(StatesGroup):
+    waiting_for_text = State()
+
+
+# Главное меню
 main_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [
-            KeyboardButton(text="✉️ Отправить сообщение"),
-        ],
-        [
-            KeyboardButton(text="💬 Мои диалоги"),
-        ],
-        [
-            KeyboardButton(text="👤 Мой профиль"),
-        ],
-        [
-            KeyboardButton(text="⚙️ Настройки"),
-        ],
-        [
-            KeyboardButton(text="❓ Помощь"),
-        ],
+        [KeyboardButton(text="✉️ Отправить сообщение")],
+        [KeyboardButton(text="💬 Мои диалоги")],
+        [KeyboardButton(text="👤 Мой профиль")],
+        [KeyboardButton(text="⚙️ Настройки")],
+        [KeyboardButton(text="❓ Помощь")],
+    ],
+    resize_keyboard=True,
+)
+
+# Меню после перехода по ссылке
+anonymous_message_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="✉️ Написать анонимно")],
+        [KeyboardButton(text="⬅️ Главное меню")],
     ],
     resize_keyboard=True,
 )
 
 
-
+# START
 @dp.message(CommandStart())
-async def start_handler(message: Message, command: CommandObject):
+async def start_handler(
+    message: Message,
+    command: CommandObject,
+    state: FSMContext
+):
     user = message.from_user
     ref_code = command.args
+
+    await state.clear()
+
+    # Переход по персональной ссылке
     if ref_code:
         async with db_pool.acquire() as connection:
             recipient = await connection.fetchrow(
@@ -84,13 +102,18 @@ async def start_handler(message: Message, command: CommandObject):
             )
             return
 
+        await state.update_data(
+            recipient_id=recipient["telegram_id"]
+        )
+
         await message.answer(
             "✉️ Ты перешёл по персональной ссылке ANON!\n\n"
-            "Теперь можно будет написать владельцу ссылки анонимное сообщение.",
-            reply_markup=main_menu
+            "Нажми кнопку ниже, чтобы написать владельцу ссылки.",
+            reply_markup=anonymous_message_menu
         )
         return
 
+    # Обычная регистрация
     async with db_pool.acquire() as connection:
         new_ref_code = secrets.token_urlsafe(9)
 
@@ -109,42 +132,6 @@ async def start_handler(message: Message, command: CommandObject):
             new_ref_code
         )
 
-    @dp.message(lambda message: message.text == "👤 Мой профиль")
-    async def profile_handler(message: Message):
-        user = message.from_user
-
-        async with db_pool.acquire() as connection:
-            profile = await connection.fetchrow(
-                """
-                SELECT username, registered_at, ref_code
-                FROM users
-                WHERE telegram_id = $1
-                """,
-                user.id
-            )
-
-        if not profile:
-            await message.answer("Профиль не найден. Напиши /start.")
-            return
-
-        username = (
-            f"@{profile['username']}"
-            if profile["username"]
-            else "Не установлен"
-        )
-
-        profile_link = (
-            f"https://t.me/{bot_username}?start={profile['ref_code']}"
-        )
-
-        await message.answer(
-            "👤 Твой профиль ANON\n\n"
-            f"Username: {username}\n"
-            "Дата регистрации: приватная\n\n"
-            "🔗 Твоя персональная ссылка:\n"
-            f"{profile_link}"
-        )
-
     if result["is_new"]:
         await message.answer(
             "👋 Добро пожаловать в ANON!\n\n"
@@ -160,20 +147,127 @@ async def start_handler(message: Message, command: CommandObject):
         )
 
 
+# Начало написания анонимного сообщения
+@dp.message(lambda message: message.text == "✉️ Написать анонимно")
+async def begin_anonymous_message(
+    message: Message,
+    state: FSMContext
+):
+    data = await state.get_data()
 
+    if not data.get("recipient_id"):
+        await message.answer(
+            "Сначала перейди по персональной ссылке ANON."
+        )
+        return
+
+    await state.set_state(SendMessageState.waiting_for_text)
+
+    await message.answer(
+        "✍️ Напиши текст анонимного сообщения:"
+    )
+
+
+# Получение текста
+@dp.message(SendMessageState.waiting_for_text)
+async def receive_anonymous_message(
+    message: Message,
+    state: FSMContext
+):
+    if not message.text:
+        await message.answer(
+            "Пожалуйста, отправь текстовое сообщение."
+        )
+        return
+
+    data = await state.get_data()
+    recipient_id = data.get("recipient_id")
+
+    if not recipient_id:
+        await state.clear()
+        await message.answer(
+            "Ссылка потерялась. Перейди по персональной ссылке ANON ещё раз.",
+            reply_markup=main_menu
+        )
+        return
+
+    await message.answer(
+        "✅ Текст получен!\n\n"
+        "Следующим шагом добавим подтверждение и доставку сообщения."
+    )
+
+    await state.clear()
+
+
+# Возврат в главное меню
+@dp.message(lambda message: message.text == "⬅️ Главное меню")
+async def back_to_main_menu(
+    message: Message,
+    state: FSMContext
+):
+    await state.clear()
+    await message.answer(
+        "Главное меню ANON.",
+        reply_markup=main_menu
+    )
+
+
+# Профиль
+@dp.message(lambda message: message.text == "👤 Мой профиль")
+async def profile_handler(message: Message):
+    user = message.from_user
+
+    async with db_pool.acquire() as connection:
+        profile = await connection.fetchrow(
+            """
+            SELECT username, registered_at, ref_code
+            FROM users
+            WHERE telegram_id = $1
+            """,
+            user.id
+        )
+
+    if not profile:
+        await message.answer(
+            "Профиль не найден. Напиши /start."
+        )
+        return
+
+    username = (
+        f"@{profile['username']}"
+        if profile["username"]
+        else "Не установлен"
+    )
+
+    profile_link = (
+        f"https://t.me/{bot_username}?start={profile['ref_code']}"
+    )
+
+    await message.answer(
+        "👤 Твой профиль ANON\n\n"
+        f"Username: {username}\n"
+        "Дата регистрации: приватная\n\n"
+        "🔗 Твоя персональная ссылка:\n"
+        f"{profile_link}"
+    )
+
+
+# Запуск webhook
 async def on_startup(bot: Bot):
     render_url = os.getenv("RENDER_EXTERNAL_URL")
 
     if not render_url:
         raise ValueError("Не найден RENDER_EXTERNAL_URL")
 
+    global bot_username
+
+    bot_info = await bot.get_me()
+    bot_username = bot_info.username
+
     await bot.set_webhook(
         url=f"{render_url}{WEBHOOK_PATH}",
         secret_token=WEBHOOK_SECRET,
     )
-    global bot_username
-    bot_info = await bot.get_me()
-    bot_username = bot_info.username
 
     logging.info("ANON webhook установлен")
 
@@ -183,10 +277,10 @@ async def on_shutdown(bot: Bot):
     await bot.session.close()
 
 
-
-
+# Основной запуск
 async def main():
     logging.basicConfig(level=logging.INFO)
+
     global db_pool
 
     database_url = os.getenv("DATABASE_URL")
@@ -199,6 +293,7 @@ async def main():
         min_size=1,
         max_size=5
     )
+
     async with db_pool.acquire() as connection:
         await connection.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -248,11 +343,9 @@ async def main():
     webhook_task = None
 
     try:
-        # Сначала открываем порт для Render
         await site.start()
         logging.info("ANON запущен на порту %s", port)
 
-        # Затем устанавливаем webhook
         async def install_webhook():
             try:
                 await on_startup(bot)
@@ -273,6 +366,7 @@ async def main():
 
         if db_pool:
             await db_pool.close()
+
         await runner.cleanup()
         await bot.session.close()
 
