@@ -168,7 +168,8 @@ async def begin_anonymous_message(
     )
 
 
-# Получение текста
+
+# Получение и доставка анонимного сообщения
 @dp.message(SendMessageState.waiting_for_text)
 async def receive_anonymous_message(
     message: Message,
@@ -191,12 +192,52 @@ async def receive_anonymous_message(
         )
         return
 
-    await message.answer(
-        "✅ Текст получен!\n\n"
-        "Следующим шагом добавим подтверждение и доставку сообщения."
-    )
+    async with db_pool.acquire() as connection:
+        message_id = await connection.fetchval(
+            """
+            INSERT INTO messages (
+                sender_id,
+                recipient_id,
+                text
+            )
+            VALUES ($1, $2, $3)
+            RETURNING id
+            """,
+            message.from_user.id,
+            recipient_id,
+            message.text
+        )
+
+    try:
+        await bot.send_message(
+            chat_id=recipient_id,
+            text=(
+                "✉️ Тебе пришло новое анонимное сообщение!\n\n"
+                f"{message.text}"
+            )
+        )
+
+        async with db_pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE messages
+                SET is_delivered = TRUE
+                WHERE id = $1
+                """,
+                message_id
+            )
+
+        await message.answer("📨 Анонимное сообщение успешно доставлено!")
+
+    except Exception:
+        logging.exception("Ошибка доставки сообщения")
+
+        await message.answer(
+            "⚠️ Сообщение сохранено, но доставить его пока не удалось."
+        )
 
     await state.clear()
+
 
 
 # Возврат в главное меню
@@ -312,6 +353,19 @@ async def main():
         """)
 
     logging.info("Таблица пользователей готова")
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id BIGSERIAL PRIMARY KEY,
+                sender_id BIGINT NOT NULL,
+                recipient_id BIGINT NOT NULL,
+                text TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                is_delivered BOOLEAN DEFAULT FALSE
+            )
+        """)
+
+    logging.info("Таблица сообщений готова")
 
     app = web.Application()
 
