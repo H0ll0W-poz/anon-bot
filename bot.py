@@ -1004,6 +1004,27 @@ async def profile_handler(message: Message):
             """,
             user.id
         )
+        stats = await connection.fetchrow("""
+            SELECT
+                (
+                    SELECT COUNT(*)
+                    FROM messages
+                    WHERE recipient_id = $1
+                ) AS received_messages,
+
+                (
+                    SELECT COUNT(*)
+                    FROM dialogs
+                    WHERE (user1_id = $1 OR user2_id = $1)
+                      AND is_active = TRUE
+                ) AS active_dialogs,
+
+                (
+                    SELECT COUNT(*)
+                    FROM user_blocks
+                    WHERE blocker_id = $1
+                ) AS blocked_users
+        """, user.id)
 
     if not profile:
         await message.answer(
@@ -1017,6 +1038,12 @@ async def profile_handler(message: Message):
         else "Не установлен"
     )
 
+    registered_at = (
+        profile["registered_at"].strftime("%d.%m.%Y")
+        if profile["registered_at"]
+        else "Неизвестно"
+    )
+
     profile_link = (
         f"https://t.me/{bot_username}?start={profile['ref_code']}"
     )
@@ -1024,7 +1051,11 @@ async def profile_handler(message: Message):
     await message.answer(
         "👤 Твой профиль ANON\n\n"
         f"Username: {username}\n"
-        "Дата регистрации: приватная\n\n"
+        f"📅 Дата регистрации: {registered_at}\n\n"
+        "📊 Статистика:\n"
+        f"📩 Получено сообщений: {stats['received_messages']}\n"
+        f"💬 Активных диалогов: {stats['active_dialogs']}\n"
+        f"🚫 Заблокировано пользователей: {stats['blocked_users']}\n\n"
         "🔗 Твоя персональная ссылка:\n"
         f"{profile_link}"
     )
