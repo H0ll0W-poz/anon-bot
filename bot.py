@@ -280,9 +280,6 @@ async def receive_anonymous_message(
             )
 
 
-
-
-
 # Возврат в главное меню
 @dp.message(lambda message: message.text == "⬅️ Главное меню")
 async def back_to_main_menu(
@@ -997,7 +994,7 @@ async def profile_handler(message: Message):
                     SELECT COUNT(*)
                     FROM user_blocks
                     WHERE blocker_id = $1
-                ) AS blocked_users
+                ) AS blocked_users,
                 (
                     SELECT COUNT(*)
                     FROM users
