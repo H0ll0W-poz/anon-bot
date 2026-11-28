@@ -311,6 +311,61 @@ async def receive_anonymous_message(
             "📨 Анонимное сообщение успешно доставлено!"
         )
 
+        # Регистрация реферала после успешной доставки
+        if referrer_id and referrer_id != sender_id:
+            try:
+                async with db_pool.acquire() as connection:
+                    new_ref_code = secrets.token_urlsafe(9)
+
+                    await connection.execute(
+                        """
+                        INSERT INTO users (
+                            telegram_id,
+                            username,
+                            ref_code,
+                            referred_by,
+                            referral_counted
+                        )
+                        SELECT $1, $2, $3, $4, TRUE
+                        WHERE NOT EXISTS (
+                            SELECT 1
+                            FROM messages
+                            WHERE id != $5
+                              AND is_delivered = TRUE
+                              AND (
+                                  sender_id = $1
+                                  OR recipient_id = $1
+                              )
+                        )
+                        ON CONFLICT (telegram_id)
+                        DO UPDATE SET
+                            referred_by = EXCLUDED.referred_by,
+                            referral_counted = TRUE
+                        WHERE users.referred_by IS NULL
+                          AND COALESCE(users.referral_counted, FALSE) = FALSE
+                          AND NOT EXISTS (
+                              SELECT 1
+                              FROM messages
+                              WHERE id != $5
+                                AND is_delivered = TRUE
+                                AND (
+                                    sender_id = $1
+                                    OR recipient_id = $1
+                                )
+                          )
+                        """,
+                        sender_id,
+                        message.from_user.username,
+                        new_ref_code,
+                        referrer_id,
+                        message_id
+                    )
+
+            except Exception:
+                logging.exception(
+                    "Ошибка регистрации нового реферала"
+                )
+
     except Exception:
         logging.exception("Ошибка доставки сообщения")
 
