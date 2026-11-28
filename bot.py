@@ -178,6 +178,7 @@ async def begin_anonymous_message(
 
 
 
+
 # Получение и доставка анонимного сообщения
 @dp.message(SendMessageState.waiting_for_text)
 async def receive_anonymous_message(
@@ -212,15 +213,20 @@ async def receive_anonymous_message(
     sender_id = message.from_user.id
     referrer_id = data.get("referrer_id")
 
+    # Проверка блокировки
     async with db_pool.acquire() as connection:
-        is_blocked = await connection.fetchval("""
+        is_blocked = await connection.fetchval(
+            """
             SELECT EXISTS (
                 SELECT 1
                 FROM user_blocks
                 WHERE blocker_id = $1
                   AND blocked_id = $2
             )
-        """, recipient_id, sender_id)
+            """,
+            recipient_id,
+            sender_id
+        )
 
     if is_blocked:
         await state.clear()
@@ -231,6 +237,7 @@ async def receive_anonymous_message(
         )
         return
 
+    # Создание диалога и сохранение сообщения
     user1_id = min(sender_id, recipient_id)
     user2_id = max(sender_id, recipient_id)
 
@@ -278,6 +285,41 @@ async def receive_anonymous_message(
                 recipient_id,
                 message.text
             )
+
+    # Доставка сообщения
+    try:
+        await bot.send_message(
+            chat_id=recipient_id,
+            text=(
+                "✉️ Тебе пришло новое анонимное сообщение!\n\n"
+                f"{message.text}"
+            )
+        )
+
+        # Отмечаем успешную доставку
+        async with db_pool.acquire() as connection:
+            await connection.execute(
+                """
+                UPDATE messages
+                SET is_delivered = TRUE
+                WHERE id = $1
+                """,
+                message_id
+            )
+
+        await message.answer(
+            "📨 Анонимное сообщение успешно доставлено!"
+        )
+
+    except Exception:
+        logging.exception("Ошибка доставки сообщения")
+
+        await message.answer(
+            "⚠️ Сообщение сохранено, но доставить его пока не удалось."
+        )
+
+    await state.clear()
+
 
 
 # Возврат в главное меню
