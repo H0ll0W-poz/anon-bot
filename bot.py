@@ -219,12 +219,26 @@ async def receive_anonymous_message(
                 INSERT INTO dialogs (user1_id, user2_id)
                 VALUES ($1, $2)
                 ON CONFLICT (user1_id, user2_id)
-                DO UPDATE SET user1_id = EXCLUDED.user1_id
+                WHERE is_active = TRUE
+                DO NOTHING
                 RETURNING id
                 """,
                 user1_id,
                 user2_id
             )
+
+            if dialog_id is None:
+                dialog_id = await connection.fetchval(
+                    """
+                    SELECT id
+                    FROM dialogs
+                    WHERE user1_id = $1
+                      AND user2_id = $2
+                      AND is_active = TRUE
+                    """,
+                    user1_id,
+                    user2_id
+                )
 
             message_id = await connection.fetchval(
                 """
