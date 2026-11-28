@@ -398,6 +398,13 @@ async def open_dialog_handler(callback: CallbackQuery):
 
         buttons.append([
             InlineKeyboardButton(
+                text="🚫 Заблокировать",
+                callback_data=f"block_user:{dialog_id}"
+            )
+        ])
+
+        buttons.append([
+            InlineKeyboardButton(
                 text="🔒 Завершить диалог",
                 callback_data=f"finish_dialog:{dialog_id}"
             )
@@ -477,6 +484,93 @@ async def confirm_finish_dialog(callback: CallbackQuery):
         "но отправлять новые сообщения уже не получится.",
         reply_markup=keyboard
     )
+
+@dp.callback_query(lambda callback: callback.data.startswith("block_user:"))
+async def block_user_handler(callback: CallbackQuery):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow("""
+            SELECT user1_id, user2_id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+        """, dialog_id, user_id)
+
+    if not dialog:
+        await callback.answer("Диалог не найден.", show_alert=True)
+        return
+
+    blocked_id = (
+        dialog["user2_id"]
+        if dialog["user1_id"] == user_id
+        else dialog["user1_id"]
+    )
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="🚫 Да, заблокировать",
+                callback_data=f"confirm_block:{dialog_id}"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="⬅️ Отмена",
+                callback_data=f"open_dialog:{dialog_id}"
+            )
+        ]
+    ])
+
+    await callback.message.answer(
+        "Заблокировать этого пользователя?\n\n"
+        "Он не сможет отправлять тебе новые сообщения.",
+        reply_markup=keyboard
+    )
+
+    await callback.answer()
+
+@dp.callback_query(lambda callback: callback.data.startswith("confirm_block:"))
+async def confirm_block_handler(callback: CallbackQuery):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow("""
+            SELECT user1_id, user2_id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+        """, dialog_id, user_id)
+
+        if not dialog:
+            await callback.answer("Диалог не найден.", show_alert=True)
+            return
+
+        blocked_id = (
+            dialog["user2_id"]
+            if dialog["user1_id"] == user_id
+            else dialog["user1_id"]
+        )
+
+        await connection.execute("""
+            INSERT INTO user_blocks (blocker_id, blocked_id)
+            VALUES ($1, $2)
+            ON CONFLICT (blocker_id, blocked_id) DO NOTHING
+        """, user_id, blocked_id)
+
+        await connection.execute("""
+            UPDATE dialogs
+            SET is_active = FALSE
+            WHERE id = $1
+        """, dialog_id)
+
+    await callback.message.answer(
+        "Пользователь заблокирован. Диалог завершён."
+    )
+
+    await callback.answer("Блокировка установлена.")
 
 # Подтверждение завершения диалога
 @dp.callback_query(lambda callback: callback.data.startswith("confirm_finish:"))
@@ -784,6 +878,20 @@ async def main():
         """)
 
     logging.info("Таблица диалогов готова")
+
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS user_blocks (
+                id BIGSERIAL PRIMARY KEY,
+                blocker_id BIGINT NOT NULL,
+                blocked_id BIGINT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                UNIQUE (blocker_id, blocked_id),
+                CHECK (blocker_id != blocked_id)
+            )
+        """)
+
+    logging.info("Таблица блокировок готова")
 
     async with db_pool.acquire() as connection:
         await connection.execute("""
