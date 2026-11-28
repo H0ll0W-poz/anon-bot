@@ -280,39 +280,46 @@ async def back_to_main_menu(
     )
 
 
-# Мои диалоги — просмотр полученных сообщений
+# Мои диалоги — список переписок
 @dp.message(lambda message: message.text == "💬 Мои диалоги")
 async def my_dialogs_handler(message: Message):
+    user_id = message.from_user.id
+
     async with db_pool.acquire() as connection:
-        messages = await connection.fetch(
+        dialogs = await connection.fetch(
             """
-            SELECT text, created_at
-            FROM messages
-            WHERE recipient_id = $1
+            SELECT
+                id,
+                CASE
+                    WHEN user1_id = $1 THEN user2_id
+                    ELSE user1_id
+                END AS partner_id,
+                created_at,
+                is_active
+            FROM dialogs
+            WHERE user1_id = $1 OR user2_id = $1
             ORDER BY created_at DESC
-            LIMIT 10
             """,
-            message.from_user.id
+            user_id
         )
 
-    if not messages:
+    if not dialogs:
         await message.answer(
-            "💬 У тебя пока нет полученных сообщений.",
+            "💬 У тебя пока нет диалогов.",
             reply_markup=main_menu
         )
         return
 
     await message.answer(
-        f"💬 Твои последние сообщения: {len(messages)}"
+        f"💬 Твои диалоги: {len(dialogs)}"
     )
 
-    for msg in messages:
-        date = msg["created_at"].strftime("%d.%m.%Y %H:%M")
+    for dialog in dialogs:
+        status = "🟢 Активный" if dialog["is_active"] else "🔒 Завершённый"
 
         await message.answer(
-            "✉️ Анонимное сообщение\n"
-            f"🕒 {date}\n\n"
-            f"{msg['text']}"
+            f"Диалог №{dialog['id']}\n"
+            f"{status}"
         )
 
 
