@@ -175,6 +175,14 @@ async def receive_anonymous_message(
     message: Message,
     state: FSMContext
 ):
+    if message.text == "⬅️ Главное меню":
+        await state.clear()
+        await message.answer(
+            "Главное меню ANON.",
+            reply_markup=main_menu
+        )
+        return
+
     if not message.text:
         await message.answer(
             "Пожалуйста, отправь текстовое сообщение."
