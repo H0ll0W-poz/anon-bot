@@ -11,7 +11,14 @@ from aiohttp import web
 from aiogram import Bot, Dispatcher
 from aiogram.filters import CommandStart
 from aiogram.filters.command import CommandObject
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 from aiogram.webhook.aiohttp_server import (
     SimpleRequestHandler,
     setup_application,
@@ -317,9 +324,83 @@ async def my_dialogs_handler(message: Message):
     for dialog in dialogs:
         status = "🟢 Активный" if dialog["is_active"] else "🔒 Завершённый"
 
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="Открыть диалог",
+                        callback_data=f"open_dialog:{dialog['id']}"
+                    )
+                ]
+            ]
+        )
+
         await message.answer(
             f"Диалог №{dialog['id']}\n"
-            f"{status}"
+            f"{status}",
+            reply_markup=keyboard
+        )
+
+# Открытие конкретного диалога
+@dp.callback_query(lambda callback: callback.data.startswith("open_dialog:"))
+async def open_dialog_handler(callback: CallbackQuery):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow(
+            """
+            SELECT id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+            """,
+            dialog_id,
+            user_id
+        )
+
+        if not dialog:
+            await callback.answer(
+                "Диалог не найден.",
+                show_alert=True
+            )
+            return
+
+        messages = await connection.fetch(
+            """
+            SELECT sender_id, text, created_at
+            FROM messages
+            WHERE dialog_id = $1
+            ORDER BY created_at ASC
+            LIMIT 50
+            """,
+            dialog_id
+        )
+
+    await callback.answer()
+
+    if not messages:
+        await callback.message.answer(
+            "В этом диалоге пока нет сообщений."
+        )
+        return
+
+    await callback.message.answer(
+        f"💬 История диалога №{dialog_id}"
+    )
+
+    for msg in messages:
+        date = msg["created_at"].strftime("%d.%m.%Y %H:%M")
+
+        if msg["sender_id"] == user_id:
+            author = "Ты"
+        else:
+            author = "Собеседник"
+
+        await callback.message.answer(
+            f"{author}\n"
+            f"🕒 {date}\n\n"
+            f"{msg['text']}"
         )
 
 
