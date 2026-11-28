@@ -200,21 +200,40 @@ async def receive_anonymous_message(
         )
         return
 
+    sender_id = message.from_user.id
+    user1_id = min(sender_id, recipient_id)
+    user2_id = max(sender_id, recipient_id)
+
     async with db_pool.acquire() as connection:
-        message_id = await connection.fetchval(
-            """
-            INSERT INTO messages (
+        async with connection.transaction():
+            dialog_id = await connection.fetchval(
+                """
+                INSERT INTO dialogs (user1_id, user2_id)
+                VALUES ($1, $2)
+                ON CONFLICT (user1_id, user2_id)
+                DO UPDATE SET user1_id = EXCLUDED.user1_id
+                RETURNING id
+                """,
+                user1_id,
+                user2_id
+            )
+
+            message_id = await connection.fetchval(
+                """
+                INSERT INTO messages (
+                    dialog_id,
+                    sender_id,
+                    recipient_id,
+                    text
+                )
+                VALUES ($1, $2, $3, $4)
+                RETURNING id
+                """,
+                dialog_id,
                 sender_id,
                 recipient_id,
-                text
+                message.text
             )
-            VALUES ($1, $2, $3)
-            RETURNING id
-            """,
-            message.from_user.id,
-            recipient_id,
-            message.text
-        )
 
     try:
         await bot.send_message(
@@ -410,6 +429,27 @@ async def main():
         """)
 
     logging.info("Таблица сообщений готова")
+
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS dialogs (
+                id BIGSERIAL PRIMARY KEY,
+                user1_id BIGINT NOT NULL,
+                user2_id BIGINT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                is_active BOOLEAN DEFAULT TRUE,
+                UNIQUE (user1_id, user2_id)
+            )
+        """)
+
+    logging.info("Таблица диалогов готова")
+
+    async with db_pool.acquire() as connection:
+        await connection.execute("""
+            ALTER TABLE messages
+            ADD COLUMN IF NOT EXISTS dialog_id BIGINT
+            REFERENCES dialogs(id)
+        """)
 
     app = web.Application()
 
