@@ -351,7 +351,7 @@ async def open_dialog_handler(callback: CallbackQuery):
     async with db_pool.acquire() as connection:
         dialog = await connection.fetchrow(
             """
-            SELECT id
+            SELECT id, is_active
             FROM dialogs
             WHERE id = $1
               AND (user1_id = $2 OR user2_id = $2)
@@ -386,15 +386,25 @@ async def open_dialog_handler(callback: CallbackQuery):
         )
         return
 
+    buttons = []
+
+    if dialog["is_active"]:
+        buttons.append([
+            InlineKeyboardButton(
+                text="↩️ Ответить",
+                callback_data=f"reply_dialog:{dialog_id}"
+            )
+        ])
+
+        buttons.append([
+            InlineKeyboardButton(
+                text="🔒 Завершить диалог",
+                callback_data=f"finish_dialog:{dialog_id}"
+            )
+        ])
+
     reply_keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="↩️ Ответить",
-                    callback_data=f"reply_dialog:{dialog_id}"
-                )
-            ]
-        ]
+        inline_keyboard=buttons
     )
 
     await callback.message.answer(
@@ -415,6 +425,91 @@ async def open_dialog_handler(callback: CallbackQuery):
             f"🕒 {date}\n\n"
             f"{msg['text']}"
         )
+
+# Запрос подтверждения завершения диалога
+@dp.callback_query(lambda callback: callback.data.startswith("finish_dialog:"))
+async def confirm_finish_dialog(callback: CallbackQuery):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        dialog = await connection.fetchrow(
+            """
+            SELECT id
+            FROM dialogs
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+              AND is_active = TRUE
+            """,
+            dialog_id,
+            user_id
+        )
+
+    if not dialog:
+        await callback.answer(
+            "Диалог уже завершён или недоступен.",
+            show_alert=True
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Да, завершить",
+                    callback_data=f"confirm_finish:{dialog_id}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="❌ Отмена",
+                    callback_data=f"open_dialog:{dialog_id}"
+                )
+            ]
+        ]
+    )
+
+    await callback.answer()
+
+    await callback.message.answer(
+        "🔒 Ты действительно хочешь завершить этот диалог?\n\n"
+        "После завершения вы оба сможете читать историю, "
+        "но отправлять новые сообщения уже не получится.",
+        reply_markup=keyboard
+    )
+
+# Подтверждение завершения диалога
+@dp.callback_query(lambda callback: callback.data.startswith("confirm_finish:"))
+async def finish_dialog_handler(callback: CallbackQuery):
+    dialog_id = int(callback.data.split(":")[1])
+    user_id = callback.from_user.id
+
+    async with db_pool.acquire() as connection:
+        result = await connection.execute(
+            """
+            UPDATE dialogs
+            SET is_active = FALSE
+            WHERE id = $1
+              AND (user1_id = $2 OR user2_id = $2)
+              AND is_active = TRUE
+            """,
+            dialog_id,
+            user_id
+        )
+
+    if result == "UPDATE 0":
+        await callback.answer(
+            "Диалог уже завершён или недоступен.",
+            show_alert=True
+        )
+        return
+
+    await callback.answer("Диалог завершён!")
+
+    await callback.message.edit_text(
+        f"🔒 Диалог №{dialog_id} завершён.\n\n"
+        "История переписки сохранена. Новые сообщения отправлять нельзя."
+    )
 
 # Начало ответа в существующем диалоге
 @dp.callback_query(lambda callback: callback.data.startswith("reply_dialog:"))
